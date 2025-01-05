@@ -1,7 +1,7 @@
 import jax.numpy as jnp, numpyro.distributions as dist, jax.random as random
 from astropy import constants as c, units as u
-import numpyro, jax, jaxopt
 from typing import NamedTuple
+import numpyro, jax, jaxopt
 
 
 key = random.PRNGKey(42)
@@ -22,20 +22,21 @@ class OrbitParams(NamedTuple):
 
 class BinaryModel:
 
-    @jax.jit
+    @staticmethod
     def init(state: OrbitParams):
         """
-        For given orbital characteristics, compute the velocity. Meant for 
+        For given orbital characteristics, compute the velocity. Meant for
         testing singular orbits. Expecting OrbitParams instance with
         non-physical velocity.
         """
+        theta = get_true_anomaly(state.M, state.e)
         v = v_r_orb(state.m_1, state.q, state.e, state.logP,
-                    state.theta, state.omega, state.i)
+                    theta, state.omega, state.i)
         init_state = OrbitParams(state.m_1, state.q, state.e, state.logP,
-                                state.i, state.omega, v, state.M, state.theta)
+                                state.i, state.omega, v, state.M, theta)
         return init_state
 
-    @jax.jit
+    @staticmethod
     def update(state: OrbitParams, dt: float) -> OrbitParams:
         """
         Increment the orbit state by time dt in days.
@@ -68,12 +69,12 @@ def get_true_anomaly(M,e):
         return M + e * jnp.sin(E)
     E = jaxopt.FixedPointIteration(fixed_point_fun=kepler_equation_fixed
                                    ).run(init_params=jnp.ones(shape=M.shape)*jnp.pi).params
-    
+
     beta = e/(1+jnp.sqrt(1-e**2))
     true_anomaly = E + 2*jnp.arctan(beta*jnp.sin(E)/(1-beta*jnp.cos(E)))
     return true_anomaly
 
-@jax.jit 
+@jax.jit
 def max_ecc(log_period):
     """
     The eccentricity of an orbit is limited by its period. The maximum is given
@@ -88,7 +89,7 @@ def v_r_orb(m_1,q,e,logP,theta,omega,i):
         Star Parameters:
         m_1: Mass of primary star in Msun
         q  : Mass ratio of the secondary to primary, defined as m_2/m_1
-        e  : Eccentricity of orbit 
+        e  : Eccentricity of orbit
         P  : Period in days
         Orbit Angles:
         θ  : True Anomaly -> phase of the orbit
@@ -110,21 +111,20 @@ def stellar_radius(m_1, g):
     """
     We can calculate stellar radii from their surface gravity and mass.
     m_1: Primary star mass in units of Msun
-    g  : Surface gravity in km/s^2
-    """
+    g  : Surface gravity in km/s^2 """
     G = None
     return jnp.sqrt(G*m_1/g)
 
 @jax.jit
 @numpyro.handlers.seed(rng_seed=key)
 def sample_params(masses: jnp.ndarray) -> OrbitParams:
-    """ 
+    """
     Samples the orbital characteristics of binaries and returns
     the center-of-mass (COM) frame line-of-site velocity (LOSV)
     of the system for one epoch of observation. Currently using
     the distributions from DM91.
-
-    masses     : Mass of the primary stars in Msun.
+    Attributes:
+    masses: Mass of the primary stars in Msun.
     """
     num_stars = masses.shape[0]
     # Current min/max values are for Leo II. Slightly vary depending on density of galaxay.
@@ -143,11 +143,11 @@ def sample_params(masses: jnp.ndarray) -> OrbitParams:
         # eccentricity = numpyro.sample('e', dist.TruncatedNormal(loc=0.31, scale=0.17))
         eccentricity = jnp.where(
             logP <= 1.08, numpyro.sample("eccentricity_low", dist.Delta(0),),
-            jnp.where(logP < 3, numpyro.sample("eccentricity_mid", dist.TruncatedNormal(loc=.25, scale=.12, 
+            jnp.where(logP < 3, numpyro.sample("eccentricity_mid", dist.TruncatedNormal(loc=.25, scale=.12,
                                                                                            low=0, high=max_ecc(logP)),),
                     numpyro.sample("eccentricity_high", dist.DoublyTruncatedPowerLaw(1.0,0,max_ecc(logP)))
             )
-        )                                                   
+        )
 
     M = numpyro.sample('mean anomaly', dist.Uniform(low=0, high=2*jnp.pi),
                                                     sample_shape=masses.shape)
@@ -158,10 +158,10 @@ def sample_params(masses: jnp.ndarray) -> OrbitParams:
 
     v = v_r_orb(masses, q, eccentricity, logP, true_anomaly, periastron, inclination)
     res = jnp.array([masses, q, eccentricity, logP,
-                         inclination, periastron, v, M, 
+                         inclination, periastron, v, M,
                          true_anomaly])
     params = OrbitParams(masses, q, eccentricity, logP,
-                         inclination, periastron, v, M, 
+                         inclination, periastron, v, M,
                          true_anomaly)
     # return OrbitState(OrbitParams(masses,q,eccentricity,10**logP,inclination,periastron),v,M,true_anomaly)
 
