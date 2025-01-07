@@ -1,10 +1,18 @@
 import jax.numpy as jnp, numpyro.distributions as dist, jax.random as random
-from astropy import constants as c, units as u
-from typing import NamedTuple
+from typing import NamedTuple, Tuple
 import numpyro, jax, jaxopt
+from spencer2017 import *
 
-
-key = random.PRNGKey(42)
+class VelocityState(NamedTuple):
+    """
+    Attributes:
+        v_intrinsic: velocity in the galactocentric frame.
+        v_r_orb    : velocity in the c.o.m frame.
+        v_total    : total velocity
+    """
+    v_intrinsic: jnp.ndarray
+    v_r_orb    : jnp.ndarray
+    v_total    : jnp.ndarray
 
 class OrbitParams(NamedTuple):
     """
@@ -16,53 +24,66 @@ class OrbitParams(NamedTuple):
     logP : jnp.ndarray
     i    : jnp.ndarray
     omega: jnp.ndarray
-    v    : jnp.ndarray
     M    : jnp.ndarray
     theta: jnp.ndarray
 
-class BinaryModel:
-
-    @staticmethod
-    def init(state: OrbitParams):
-        """
-        For given orbital characteristics, compute the velocity. Meant for
-        testing singular orbits. Expecting OrbitParams instance with
-        non-physical velocity.
-        """
-        theta = get_true_anomaly(state.M, state.e)
-        v = v_r_orb(state.m_1, state.q, state.e, state.logP,
-                    theta, state.omega, state.i)
-        init_state = OrbitParams(state.m_1, state.q, state.e, state.logP,
-                                state.i, state.omega, v, state.M, theta)
-        return init_state
-
-    @staticmethod
-    def update(state: OrbitParams, dt: float) -> OrbitParams:
-        """
-        Increment the orbit state by time dt in days.
-        """
-        M = state.M + 2*jnp.pi*dt/10**state.logP # increment orbit by dt in days
-        theta = get_true_anomaly(M, state.e)     # get new orbit phase
-        v = v_r_orb(state.m_1, state.q, state.e, state.logP,
-                    theta, state.omega, state.i) # get v_r at new phase
-        new_state = OrbitParams(state.m_1, state.q, state.e, state.logP,
-                                state.i, state.omega, v, M, theta) # new state
-        return new_state
-
-def inclination_dist(key, shape):
+class OrbitState(NamedTuple):
     """
-    Inverse CDF sampling for orbital inclination.
+    Total state of the model.
     """
-    icdf = lambda u: jnp.arccos(1 - u)
-    u = random.uniform(key, shape)
-    return icdf(u)
+    velocity_state: VelocityState
+    orbit_params  : OrbitParams
+    rng_key       : random.PRNGKey
+
+class OrbitalInclination(dist.Distribution):
+    support = dist.constraints.interval(0, jnp.pi/2)
+
+    def __init__(self):
+        super().__init__(batch_shape = (), event_shape=())
+
+    def sample(self, key, sample_shape=()):
+        """
+        Sample from the orbital inclination distribution using inverse CDF sampling.
+
+        Args:
+            key: PRNGKey for random sampling
+            sample_shape: Shape of samples to generate
+
+        Returns:
+            Samples from orbital inclination distribution in radians
+        """
+        shape = sample_shape + self.batch_shape
+        u = random.uniform(key, shape)
+        return jnp.arccos(1 - u)
+
+    def log_prob(self, value):
+        """
+        Compute log probability of the orbital inclination value.
+
+        The PDF is p(i) = sin(i) for i in [0, pi/2]
+        Therefore log_prob = log(sin(i))
+
+        Args:
+            value: Value to compute probability for
+
+        Returns:
+            Log probability of the value
+        """
+        value = jnp.asarray(value)
+        if self._validate_args:
+            self._validate_sample(value)
+
+        # Handle edge cases where sin(i) = 0
+        safe_val = jnp.clip(value, 1e-6, jnp.pi - 1e-6)
+        return jnp.log(jnp.sin(safe_val))
 
 def get_true_anomaly(M,e):
     """
     Numerically compute the true anomaly from Keplers Equation using fixed point
     iteration.
-    M: Mean anomaly (randomly sampled)
-    e: Eccentricity
+    Args:
+        M: Mean anomaly (randomly sampled)
+        e: Eccentricity
     """
     @jax.jit
     def kepler_equation_fixed(E):
@@ -82,104 +103,141 @@ def max_ecc(log_period):
     """
     return 1 - (10**log_period/2)**(-2/3)
 
-def v_r_orb(m_1,q,e,logP,theta,omega,i):
+def v_r_orb(params: OrbitParams):
     """
     Orbital Radial Velocity/ Line-of-sight velocity in the center-of-mass frame of the binary orbit.
-    Attributes:
-        Star Parameters:
+    Args:
+        Stellar:
         m_1: Mass of primary star in Msun
         q  : Mass ratio of the secondary to primary, defined as m_2/m_1
         e  : Eccentricity of orbit
         P  : Period in days
-        Orbit Angles:
+        Orientation:
         θ  : True Anomaly -> phase of the orbit
         ω  : Argument of periastron/periapsis -> angle between ascending node and periapsis
         i  : Inclination
     Returns:
-    v  : Radial velocity of primary star in km/s w.r.t the c.o.m.
+        v  : Radial velocity of primary star in km/s w.r.t the c.o.m.
     References:
-    Implemented as in the PhD Thesis of Meghin E. Spencer (2017),
+    Implemented as in the PhD Thesis of Meghin Spencer (2017),
     https://deepblue.lib.umich.edu/handle/2027.42/140878.
     """
-    G=(c.G.to(u.km**3/(u.Msun * u.s**2))).value
-    P = (10**logP)*24*3600
-    inner_power = 2*jnp.pi*G*m_1/(P*(1+q)**2)
-    orientation = jnp.sin(i)*( jnp.cos(theta+omega) + e*jnp.cos(omega) )
-    return q/jnp.sqrt(1-e**2) * inner_power**(1/3) * orientation
+    G = 132712440000.0 # Newtons constant in km^3/(Msun * s^2)
+    P = (10**params.logP)*24*3600 # log_10 days -> seconds
+    inner_power = 2*jnp.pi*G*params.m_1/(P*(1+params.q)**2)
+    orientation = jnp.sin(params.i)*(jnp.cos(params.theta+params.omega)+params.e*jnp.cos(params.omega))
+    return params.q/jnp.sqrt(1-params.e**2)*inner_power**(1/3)*orientation
 
-def stellar_radius(m_1, g):
-    """
-    We can calculate stellar radii from their surface gravity and mass.
-    m_1: Primary star mass in units of Msun
-    g  : Surface gravity in km/s^2 """
-    G = None
-    return jnp.sqrt(G*m_1/g)
+class Model:
 
-@jax.jit
-@numpyro.handlers.seed(rng_seed=key)
-def sample_params(masses: jnp.ndarray) -> OrbitParams:
-    """
-    Samples the orbital characteristics of binaries and returns
-    the center-of-mass (COM) frame line-of-site velocity (LOSV)
-    of the system for one epoch of observation. Currently using
-    the distributions from DM91.
-    Attributes:
-    masses: Mass of the primary stars in Msun.
-    """
-    num_stars = masses.shape[0]
-    # Current min/max values are for Leo II. Slightly vary depending on density of galaxay.
-    min_logP = 1.57
-    max_logP = 6.51
+    def __init__(self,v_galaxy_loc,v_galaxy_scale,masses,binary_fraction):
+        self.bin_frac = binary_fraction
+        self.v_scale  = v_galaxy_scale
+        self.v_loc    = v_galaxy_loc
+        self.masses   = masses
 
-    with numpyro.plate("ps & qs", num_stars):
-        q = numpyro.sample("mass ratio", dist.TruncatedNormal(loc=0.23, scale=0.42,
-                                                              low=0.1, high=1.0))
-        # q = numpyro.sample('mass ratio', dist.Uniform(low=0.1, high=1.0))
+    def init(self,key=None) -> OrbitState:
+        """
+        Generate initial state
+        """
+        orbit_key, velocity_key = random.split(key)
+        self.binaries = dist.Bernoulli(probs=self.bin_frac
+                                ).sample(key=key,sample_shape=self.masses.shape)
+        binary_masses = self.masses[jnp.argwhere(self.binaries)]
+        model = numpyro.handlers.seed(self.sample_orbit, orbit_key)
+        orbit_params = model(binary_masses)
+        v_i = dist.Normal(loc=self.v_loc, scale=self.v_scale
+                                ).sample(key=velocity_key, sample_shape=self.masses.shape)
+        v_r = v_r_orb(orbit_params)
+        v_r_ = self.binaries.copy().at[jnp.where(self.binaries== 1)[0]].set(v_r)
+        v_t = v_i + v_r_
+        v_state = VelocityState(v_i,v_r, v_t)
+        return OrbitState(v_state, orbit_params, velocity_key)
 
-        logP = numpyro.sample("logP", dist.TruncatedNormal(loc=4.8, scale=2.3,
-                                                           low=min_logP, high=max_logP))
+    def update(self, state: OrbitState, dt: jnp.ndarray) -> OrbitState:
+        """
+        Implemented before already.
+        """
+        rng_key, rng_key_step = random.split(state.rng_key)
+        state = state.orbit_params
+        M = state.M + 2*jnp.pi*dt/10**state.logP # increment orbit by dt in days
+        theta = get_true_anomaly(M, state.e)     # get new orbit phase
+        v = v_r_orb(state) # get v_r at new phase
+        new_orbit_params = OrbitParams(state.m_1, state.q, state.e, state.logP,
+                                state.i, state.omega, M, theta) # new state
+        new_velocity_state = jnp.array(0)
+        new_orbit_state = OrbitState(new_velocity_state, new_orbit_params, rng_key)
+        return new_orbit_state
 
-    with numpyro.plate('eccentricity', num_stars):
-        # eccentricity = numpyro.sample('e', dist.TruncatedNormal(loc=0.31, scale=0.17))
-        eccentricity = jnp.where(
-            logP <= 1.08, numpyro.sample("eccentricity_low", dist.Delta(0),),
-            jnp.where(logP < 3, numpyro.sample("eccentricity_mid", dist.TruncatedNormal(loc=.25, scale=.12,
-                                                                                           low=0, high=max_ecc(logP)),),
-                    numpyro.sample("eccentricity_high", dist.DoublyTruncatedPowerLaw(1.0,0,max_ecc(logP)))
-            )
-        )
+    @staticmethod
+    def sample_orbit(masses: jnp.ndarray) -> OrbitParams:
+        """
+        Samples the orbital characteristics of binaries and returns
+        the center-of-mass (COM) frame line-of-site velocity (LOSV)
+        of the system for one epoch of observation. Currently using
+        the distributions from DM91.
+        Args:
+            masses: Mass of the primary stars in Msun.
+        """
+        num_stars = masses.shape[0]
+        # Current min/max values are for Leo II. Slightly vary depending on density of galaxay.
+        min_logP = 1.57
+        max_logP = 6.51
 
-    M = numpyro.sample('mean anomaly', dist.Uniform(low=0, high=2*jnp.pi),
-                                                    sample_shape=masses.shape)
-    true_anomaly = get_true_anomaly(M, eccentricity)
-    inclination = inclination_dist(key=key, shape=masses.shape)
-    periastron = numpyro.sample('periastron', dist.Uniform(low=0, high=2*jnp.pi),
-                                                           sample_shape=masses.shape)
+        with numpyro.plate("ps & qs", num_stars):
+            q = numpyro.sample("mass ratio", dist.TruncatedNormal(loc=0.23, scale=0.42,
+                                                                low=0.1, high=1.0))
+            logP = numpyro.sample("logP", dist.TruncatedNormal(loc=4.8, scale=2.3,
+                                                            low=min_logP, high=max_logP))
 
-    v = v_r_orb(masses, q, eccentricity, logP, true_anomaly, periastron, inclination)
-    res = jnp.array([masses, q, eccentricity, logP,
-                         inclination, periastron, v, M,
-                         true_anomaly])
-    params = OrbitParams(masses, q, eccentricity, logP,
-                         inclination, periastron, v, M,
-                         true_anomaly)
-    # return OrbitState(OrbitParams(masses,q,eccentricity,10**logP,inclination,periastron),v,M,true_anomaly)
+        with numpyro.plate('eccentricity', num_stars):
+            eccentricity = jnp.where(
+                logP <= 1.08, numpyro.sample("eccentricity_low",
+                dist.Delta(0),),
+                jnp.where(logP < 3, numpyro.sample("eccentricity_mid",
+                dist.TruncatedNormal(loc=.25, scale=.12, low=0, high=max_ecc(logP)),),
+                numpyro.sample("eccentricity_high",
+                dist.DoublyTruncatedPowerLaw(1.0,0,max_ecc(logP)))
+                ))
 
-masses = jnp.ones(shape=(1000,))*0.8
-state = sample_params(masses)
-# vs = [[] for _ in range(len(state.v))]
+        M = numpyro.sample('mean anomaly', dist.Uniform(low=0, high=2*jnp.pi), sample_shape=masses.shape)
+        true_anomaly = get_true_anomaly(M.flatten(), eccentricity)
+        inclination = numpyro.sample('inclination', OrbitalInclination(), sample_shape=masses.shape)
+        periastron = numpyro.sample('periastron', dist.Uniform(low=0, high=2*jnp.pi),
+                                                            sample_shape=masses.shape)
 
-# import matplotlib.pyplot as plt
-# from tqdm import tqdm
+        params = OrbitParams(masses.flatten(), q.flatten(), eccentricity.flatten(), logP.flatten(),
+                            inclination.flatten(), periastron.flatten(), M.flatten(),
+                            true_anomaly.flatten())
+        return params
 
-# for _ in tqdm(range(100)):
-#     state = state.update(40)
-#     for i in range(len(state.v)):
-#         vs[i].append(state.v[i])
 
-# for _ in range(1000):
-#     plt.plot(range(100), vs[_])
-#     plt.show()
-# plt.hist(res.params.P, bins=50)
-# plt.semilogy()
-# print(jnp.argmax(state.params.e))
+def main():
+    """Usage"""
+    masses     = jnp.array([0.8]*10_000)# stellar masses
+    model      = Model(20,4,masses,0.50) # binary model
+    key        = random.PRNGKey(42)
+    num_epochs = 100 # number of observations
+    state = model.init(key) # initial state
+    body_fn = jax.jit(model.update)
+    for _ in range(num_epochs):
+        state = body_fn(state, jnp.array(10))
+        # state = model.update(state, jnp.array(10))
+    print(state)
+
+def test():
+    key = random.PRNGKey(11)
+    masses = jnp.ones(shape=(10_000_000,))
+    model = Model(binary_fraction=0.5, v_galaxy_loc=20, v_galaxy_scale=5, masses=masses)
+    state = model.init(key=key)
+    print(state.velocity_state.v_r_orb.shape)
+    import matplotlib.pyplot as plt
+    plt.hist(jnp.log10(jnp.abs(state.velocity_state.v_r_orb)),
+     bins=100, histtype='step', color='k', density=True)
+    plt.xlim(0)
+    # plt.hist(state.velocity_state.v_total, bins=100, histtype='step', label='v_b + v_i', density=True)
+    # plt.hist(state.velocity_state.v_intrinsic, bins=100, histtype='step', label='v_i', density=True)
+    plt.legend()
+    plt.show()
+
+main()
