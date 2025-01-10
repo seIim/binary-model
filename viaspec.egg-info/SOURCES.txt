@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+viaspec.egg-info/PKG-INFO
+viaspec.egg-info/SOURCES.txt
+viaspec.egg-info/dependency_links.txt
+viaspec.egg-info/requires.txt
+viaspec.egg-info/top_level.txt

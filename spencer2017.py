@@ -1,5 +1,5 @@
 import jax.numpy as jnp, numpyro.distributions as dist, jax.random as random
-from typing import NamedTuple, Tuple
+from typing import NamedTuple
 import numpyro, jax, jaxopt
 from spencer2017 import *
 
@@ -214,11 +214,14 @@ class Model:
 
 def main():
     """Usage"""
-    masses     = jnp.array([0.8]*10_000)# stellar masses
-    model      = Model(20,4,masses,0.50) # binary model
+    v_mu       = 20  # intrinsic mean velocity
+    v_std      = 4   # intrinsic velocity dispersion
+    bin_frac   = 0.5 # fraction of binary stars
+    masses     = jnp.array([0.8]*10_000) # stellar masses
+    model      = Model(v_mu,v_std,masses,bin_frac) # binary model
     key        = random.PRNGKey(42)
     num_epochs = 100 # number of observations
-    state = model.init(key) # initial state
+    state = model.init(key) # initialize the model state
     body_fn = jax.jit(model.update)
     for _ in range(num_epochs):
         state = body_fn(state, jnp.array(10))
@@ -230,7 +233,6 @@ def test():
     masses = jnp.ones(shape=(10_000_000,))
     model = Model(binary_fraction=0.5, v_galaxy_loc=20, v_galaxy_scale=5, masses=masses)
     state = model.init(key=key)
-    print(state.velocity_state.v_r_orb.shape)
     import matplotlib.pyplot as plt
     plt.hist(jnp.log10(jnp.abs(state.velocity_state.v_r_orb)),
      bins=100, histtype='step', color='k', density=True)
@@ -240,4 +242,4 @@ def test():
     plt.legend()
     plt.show()
 
-main()
+test()
