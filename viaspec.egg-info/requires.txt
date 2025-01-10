@@ -1,4 +1,0 @@
-jax>=0.4.38
-jaxopt>=0.8.3
-matplotlib>=3.10.0
-numpyro>=0.16.1
