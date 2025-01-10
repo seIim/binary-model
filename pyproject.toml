@@ -1,7 +1,7 @@
 [project]
-name = "viaspec"
+name = "binary-model"
 version = "0.1.0"
-description = "Add your description here"
+description = "binary model for viaspec"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
