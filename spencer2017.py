@@ -245,4 +245,4 @@ def test():
     plt.legend()
     plt.show()
 
-test()
+main()
