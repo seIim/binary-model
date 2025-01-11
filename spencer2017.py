@@ -129,6 +129,9 @@ def v_r_orb(params: OrbitParams):
     return params.q/jnp.sqrt(1-params.e**2)*inner_power**(1/3)*orientation
 
 class Model:
+    """
+    Binary orbit model
+    """
 
     def __init__(self,v_galaxy_loc,v_galaxy_scale,masses,binary_fraction):
         self.bin_frac = binary_fraction
