@@ -152,7 +152,7 @@ class Model:
         v_i = dist.Normal(loc=self.v_loc, scale=self.v_scale
                                 ).sample(key=velocity_key, sample_shape=self.masses.shape)
         v_r = v_r_orb(orbit_params)
-        v_r_ = self.binaries.copy().at[jnp.where(self.binaries== 1)[0]].set(v_r)
+        v_r_ = self.binaries.copy().at[jnp.where(self.binaries == 1)[0]].set(v_r)
         v_t = v_i + v_r_
         v_state = VelocityState(v_i,v_r, v_t)
         return OrbitState(v_state, orbit_params, velocity_key)
@@ -237,12 +237,10 @@ def test():
     model = Model(binary_fraction=0.5, v_galaxy_loc=20, v_galaxy_scale=5, masses=masses)
     state = model.init(key=key)
     import matplotlib.pyplot as plt
-    plt.hist(jnp.log10(jnp.abs(state.velocity_state.v_r_orb)),
-     bins=100, histtype='step', color='k', density=True)
+    plt.hist(jnp.log10(jnp.abs(state.velocity_state.v_r_orb + 1e-10)), bins=1000, histtype='step', density=True)
+    plt.xlabel(r'$\log_{10}v_\mathrm{r,orb}$')
+    plt.ylabel(r'$P(\log_{10}v_\mathrm{r,orb})$')
     plt.xlim(0)
-    # plt.hist(state.velocity_state.v_total, bins=100, histtype='step', label='v_b + v_i', density=True)
     # plt.hist(state.velocity_state.v_intrinsic, bins=100, histtype='step', label='v_i', density=True)
     plt.legend()
     plt.show()
-
-main()
