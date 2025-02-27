@@ -1,6 +1,3 @@
-"""
-Implementing the binary model from the phd thesis of Meghin Spencer, 2017.
-"""
 import jax.numpy as jnp, numpyro.distributions as dist, jax.random as random
 from jax.typing import ArrayLike
 import numpyro, jax
