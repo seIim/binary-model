@@ -1,10 +1,13 @@
 """
 Implementing the binary model from the phd thesis of Meghin Spencer, 2017.
 """
-import jax.numpy as jnp, numpyro.distributions as dist, jax.random as random
-from jax.typing import ArrayLike
-import numpyro, jax
+import jax
+import jax.numpy as jnp
+import jax.random as random
+import numpyro
+import numpyro.distributions as dist
 from utils import *
+from jax.typing import ArrayLike
 
 
 def sample_orbit(masses: jax.Array, log_g: jax.Array, max_logP: float = 6.51) -> OrbitParams:
@@ -22,7 +25,7 @@ def sample_orbit(masses: jax.Array, log_g: jax.Array, max_logP: float = 6.51) ->
         # Ps & qs
         q = jnp.array(numpyro.sample("mass ratio", dist.TruncatedNormal(loc=0.23, scale=0.42, low=0.1, high=1.0)))
         min_logP = get_min_logP(log_g, masses, q)
-        logP = jnp.array(numpyro.sample("logP",    dist.TruncatedNormal(loc=4.8, scale=2.3, low=min_logP, high=max_logP)))
+        logP = jnp.array(numpyro.sample("logP", dist.TruncatedNormal(loc=4.8, scale=2.3, low=min_logP, high=max_logP)))
         # Eccentricity
         e_low = jnp.array(numpyro.sample("e_low",   dist.Delta(0)))
         e_mid = jnp.array(numpyro.sample("e_mid",   dist.TruncatedNormal(loc=.25, scale=.12, low=0, high=max_ecc(logP))))
@@ -58,8 +61,8 @@ def v_r_orb(params: OrbitParams) -> jax.Array:
     Implemented as in the PhD Thesis of Meghin Spencer (2017),
     https://deepblue.lib.umich.edu/handle/2027.42/140878.
     """
-    G = 132712440000.0 # Newtons constant in km^3/(Msun * s^2)
-    P = (10**params.logP)*24*3600 # log_10 days -> seconds
+    G = 132712440000.0  # Newtons constant in km^3/(Msun * s^2)
+    P = (10**params.logP)*24*3600  # log_10 days -> seconds
     inner_power = 2*jnp.pi*G*params.m_1/(P*(1+params.q)**2)
     orientation = jnp.sin(params.inclination)*(jnp.cos(params.true_anomaly+params.periapsis)+params.e*jnp.cos(params.periapsis))
     return params.q/jnp.sqrt(1-params.e**2)*inner_power**(1/3)*orientation
@@ -90,15 +93,14 @@ def generate_orbit_state(key: jax.Array,
 @jax.jit
 def binary_step(params: OrbitParams, dt_days) -> OrbitState:
     """ Increments the orbits in state by dt_days, saving the new velocities. """
-    
-    mean_anomaly = params.mean_anomaly + 2*jnp.pi*dt_days/10**params.logP # increment orbit by dt in days
-    true_anomaly = get_true_anomaly(mean_anomaly, params.e)     # get new orbit phase
+    mean_anomaly = params.mean_anomaly + 2*jnp.pi*dt_days/10**params.logP  # increment orbit by dt in days
+    true_anomaly = get_true_anomaly(mean_anomaly, params.e)  # get new orbit phase
     new_params = OrbitParams(m_1=params.m_1, q=params.q, e=params.e, logP=params.logP,
-                             periapsis = params.periapsis, inclination = params.inclination,
+                             periapsis=params.periapsis, inclination=params.inclination,
                              mean_anomaly=mean_anomaly, true_anomaly=true_anomaly)
     v_r = v_r_orb(new_params)
     return OrbitState(params=new_params, v_r=v_r)
-    
+
 
 def main():
     """ USAGE """

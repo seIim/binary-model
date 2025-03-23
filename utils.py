@@ -1,11 +1,12 @@
-import jax.numpy as jnp, numpyro.distributions as dist, jax.random as random
+import jax
+import jax.numpy as jnp
+import jax.random as random
+import numpyro.distributions as dist
 from typing import NamedTuple
-import numpyro, jax
-from jax import lax
 
 
 class OrbitParams(NamedTuple):
-    """ 
+    """
     Elements:
         Stellar:
         m_1: Mass of primary star in Msun
@@ -18,13 +19,13 @@ class OrbitParams(NamedTuple):
         i  : inclination
     """
     m_1         : jax.Array 
-    q           : jax.Array 
-    e           : jax.Array 
-    logP        : jax.Array 
-    periapsis   : jax.Array 
-    inclination : jax.Array 
-    mean_anomaly: jax.Array 
-    true_anomaly: jax.Array 
+    q           : jax.Array
+    e           : jax.Array
+    logP        : jax.Array
+    periapsis   : jax.Array
+    inclination : jax.Array
+    mean_anomaly: jax.Array
+    true_anomaly: jax.Array
 
 
 class OrbitState(NamedTuple):
@@ -39,7 +40,7 @@ class OrbitalInclination(dist.Distribution):
     support = dist.constraints.interval(0, jnp.pi/2)
 
     def __init__(self):
-        super().__init__(batch_shape = (), event_shape=())
+        super().__init__(batch_shape=(), event_shape=())
 
     def sample(self, key, sample_shape=()):
         """
@@ -58,7 +59,7 @@ class OrbitalInclination(dist.Distribution):
         value = jnp.asarray(value)
         if self._validate_args:
             self._validate_sample(value)
-        # Clip to [1e-6, π/2 - 1e-6] to match support
+        # Clip to [1e-6, pi/2 - 1e-6] to match support
         safe_val = jnp.clip(value, 1e-6, jnp.pi/2 - 1e-6)
         return jnp.log(jnp.sin(safe_val))
 
@@ -78,10 +79,10 @@ def get_true_anomaly(M: jax.Array, e: jax.Array, max_iter=100) -> jax.Array:
         return E_next, E_next
 
     E_init = jnp.ones_like(M) * jnp.pi
-    E_final, _ = lax.scan(
-        lambda carry, _: (body_fun(carry), None), 
-        (E_init, E_init), 
-        xs=None, 
+    E_final, _ = jax.lax.scan(
+        lambda carry, _: (body_fun(carry), None),
+        (E_init, E_init),
+        xs=None,
         length=max_iter
     )
     E = E_final[0]
