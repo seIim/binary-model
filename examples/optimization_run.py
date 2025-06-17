@@ -2,6 +2,39 @@
 Optimizing the detection fraction of binaries
 in mock samples of dwarf galaxies.
 """
+import os, sys
+sys.path.insert(0, '..')
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+plt.rcParams.update({'axes.linewidth'    : 0.4,
+                     'ytick.major.width' : 0.4,
+                     'ytick.minor.width' : 0.4,
+                     'xtick.major.width' : 0.4,
+                     'xtick.minor.width' : 0.4,
+                     'xtick.major.size'  : 4,
+                     'xtick.minor.size'  : 2,
+                     'ytick.major.size'  : 4,
+                     'ytick.minor.size'  : 2,
+                     'xtick.minor.visible' : 'True',
+                     'ytick.minor.visible' : 'True',
+                     'xtick.labelsize': 8, 
+                     'ytick.labelsize': 8,
+                     'axes.labelsize' : 8,
+                     'font.family': 'Sans Serif',
+                     'figure.figsize': (3.5, 3.33),
+                     'figure.dpi' : 200,
+                     'ytick.right': 'True',
+                     'xtick.top'  : 'True',
+                     'ytick.direction': 'in',
+                     'xtick.direction': 'in',
+                     'axes.spines.top': 'True',
+                     'axes.grid': 'False',
+                     'grid.linestyle': '--',
+                     'grid.linewidth': 0.10
+                    })
+sns.set_palette('deep')
+
 import jax
 import jax.numpy as jnp
 import jax.random as random
@@ -336,13 +369,10 @@ def dispersion_reduction_with_errors(num_stars=1000,
     
     def process_epoch(num_epochs, key):
         """Process single epoch count with given random key"""
-        # Split keys
         dt_key, noise_key, sample_key = random.split(key, 3)
         
-        # Generate velocities
         dt_days = jnp.array([365.25/num_epochs]*num_epochs)
         
-        # Model velocities
         model_vr = compute_vr(
             model_state,
             dt_days=dt_days,
@@ -350,7 +380,6 @@ def dispersion_reduction_with_errors(num_stars=1000,
             n_binaries=100000
         )
         
-        # Observed velocities
         obs_vr = compute_vr(
             obs_state,
             dt_days=dt_days,
@@ -360,7 +389,6 @@ def dispersion_reduction_with_errors(num_stars=1000,
         binary_vr = jnp.zeros((num_stars, num_epochs))
         binary_vr = binary_vr.at[binary_mask].set(obs_vr)
         
-        # Generate new noise and single-star velocities
         single_vlos = true_dispersion * random.normal(noise_key, (num_stars,))
         noise = obs_noise * random.normal(noise_key, (num_stars, num_epochs))
         observed_vlos = single_vlos[:, None] + noise + binary_vr
@@ -408,14 +436,11 @@ def precomputed_dispersion_experiment(num_stars=100,
     true_dispersion = 1.0
     model_grid_size = 1000000  # Number of binary templates in model grid
 
-    # Generate observed sample -----------------------------------------------
     key, bin_key, orb_key, noise_key = random.split(key, 4)
 
-    # 1. Binary mask for observed stars
     binary_mask = random.bernoulli(bin_key, binary_fraction, (num_stars,))
     num_binaries = binary_mask.sum()
 
-    # 2. Generate persistent binary orbits (all epochs)
     dt_days = jnp.array([365.25/max_epochs]*max_epochs)  # Annual observations
     binary_state = generate_orbit_state(
         orb_key,
@@ -424,16 +449,13 @@ def precomputed_dispersion_experiment(num_stars=100,
     )
     binary_vr = compute_vr(binary_state, dt_days, max_epochs, num_binaries)
 
-    # 3. Generate persistent single-star velocities + noise
     single_vlos = true_dispersion * random.normal(noise_key, (num_stars,))
     noise = obs_noise * random.normal(noise_key, (num_stars, max_epochs))
 
-    # 4. Combine into full velocity array (shape: stars × epochs)
     all_velocities = jnp.zeros((num_stars, max_epochs))
     all_velocities = all_velocities.at[binary_mask].add(binary_vr)
     all_velocities += single_vlos[:, None] + noise
 
-    # Precompute model grid ---------------------------------------------------
     key, model_key = random.split(key)
     model_state = generate_orbit_state(
         model_key,
@@ -442,7 +464,6 @@ def precomputed_dispersion_experiment(num_stars=100,
     )
     model_vr = compute_vr(model_state, dt_days, max_epochs, model_grid_size)
 
-    # Calculate dispersion ratios ---------------------------------------------
     ratios = []
 
     for num_epochs in range(1, max_epochs+1):
@@ -469,12 +490,9 @@ def precomputed_dispersion_experiment(num_stars=100,
 
 
 if __name__ == '__main__':
-
-    import matplotlib.pyplot as plt
-
     for i in [0.1, 0.5, 1.0]:
         epochs, ratios = precomputed_dispersion_experiment(
-            num_stars=100,
+            num_stars=500,
             binary_fraction=0.5,
             obs_noise=i,
             max_epochs=10
@@ -485,4 +503,4 @@ if __name__ == '__main__':
         plt.ylabel(r"$\mathrm{\sigma/\sigma_0}$")
         plt.legend()
 
-    plt.show()
+    plt.savefig('../figs/dispersion.pdf')

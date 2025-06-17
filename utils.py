@@ -33,7 +33,7 @@ class OrbitState(NamedTuple):
     Tracks quantities which characterize the binary orbits.
     """
     params: OrbitParams
-    v_r   : jax.Array 
+    v_r: jax.Array
 
 
 class OrbitalInclination(dist.Distribution):
@@ -65,7 +65,8 @@ class OrbitalInclination(dist.Distribution):
 
 
 def get_true_anomaly(M: jax.Array, e: jax.Array, max_iter=100) -> jax.Array:
-    """ Fixed point iteration to solve for the true anomaly w/ Keplers Equation.
+    """
+    Fixed point iteration to solve for the true anomaly w/ Keplers Equation.
     Args:
         M: mean anomaly
         e: eccentricity
